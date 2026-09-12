@@ -34,9 +34,6 @@
   "bugs": {
     "url": "https://github.com/mynk8/dsh-plugins/issues"
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "engines": {
     "node": ">=20"
   },

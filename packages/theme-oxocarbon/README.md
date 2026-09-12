@@ -8,12 +8,28 @@ there is no host state, no service, and no build step.
 
 ## Install
 
+No registry: install straight from the repository, which resolves the package as
+`@mynk8/dsh-theme-oxocarbon`.
+
 ```bash
-dsh plugin --profile web add @mynk8/dsh-theme-oxocarbon
+dsh plugin --profile web add "github:mynk8/dsh-plugins#path:packages/theme-oxocarbon"
+```
+
+Pin a commit for a reproducible install — `&` combines the ref with the subdirectory:
+
+```bash
+dsh plugin --profile web add "github:mynk8/dsh-plugins#<commit>&path:packages/theme-oxocarbon"
+```
+
+From a local clone, or from a release tarball:
+
+```bash
+dsh plugin --profile web add link:~/workspace/dsh-plugins/packages/theme-oxocarbon
+dsh plugin --profile web add https://github.com/mynk8/dsh-plugins/releases/download/<tag>/mynk8-dsh-theme-oxocarbon-<version>.tgz
 ```
 
 DSH appends any profile dependency that declares `dsh.bundle.patch` to
-`dsh.profile.bundles`, so this is the whole install. Bundle layers compose at boot:
+`dsh.profile.bundles`, so that is the whole install. Bundle layers compose at boot:
 restart the `dsh web` host and reload the page.
 
 ### The one rule: never activate it twice
