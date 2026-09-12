@@ -1,0 +1,15 @@
+{
+  "name": "dsh-plugins",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Plugins and desktop tooling for DeepSeek Harness (DSH)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mynk8/dsh-plugins.git"
+  },
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=20"
+  }
+}

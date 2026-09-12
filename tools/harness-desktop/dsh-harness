@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+"""DeepSeek Harness desktop wrapper.
+
+Owns the lifecycle of the local dsh web host and hands the window to Chrome:
+
+  * the tray icon supervises the host (start on demand, restart, stop on quit)
+  * the window itself is a Chrome app window, so it gets Chromium's GPU stack
+    instead of a bundled runtime
+
+Modes:
+  dsh-harness                 run the tray (starts the host if it is down)
+  dsh-harness --app           ensure host, open the window, make sure a tray runs
+  dsh-harness --status        print host state and exit
+  dsh-harness --start|--stop|--restart
+  dsh-harness --selftest N    show the tray for N seconds, then exit
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REPO = Path(os.environ.get("DSH_REPO", str(Path.home() / "workspace" / "deepseek-harness")))
+PORT = int(os.environ.get("DSH_WEB_PORT", "3080"))
+URL = f"http://127.0.0.1:{PORT}"
+NODE = os.environ.get("DSH_NODE") or shutil.which("node") or "/usr/bin/node"
+CHROME = os.environ.get("DSH_BROWSER", "google-chrome-stable")
+WM_CLASS = "dsh-harness"
+
+STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "dsh-harness"
+LOG = STATE / "web.log"
+HOST_PID = STATE / "host.pid"
+TRAY_PID = STATE / "tray.pid"
+ICON_SRC = Path(os.environ.get("DSH_ICON", REPO / "apps/web/public/favicon.svg"))
+FALLBACK_ICON = Path(__file__).resolve().parent / "harness-desktop.svg"
+AUTOSTART = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "autostart/dsh-harness.desktop"
+STATE.mkdir(parents=True, exist_ok=True)
+
+
+def host_up(timeout: float = 0.4) -> bool:
+    """True when something is accepting connections on the host port."""
+    try:
+        with socket.create_connection(("127.0.0.1", PORT), timeout):
+            return True
+    except OSError:
+        return False
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def read_pid(path: Path) -> int | None:
+    try:
+        pid = int(path.read_text().strip())
+    except (OSError, ValueError):
+        return None
+    return pid if alive(pid) else None
+
+
+def start_host(wait: float = 60.0) -> bool:
+    """Spawn the host as our child and wait for the port to answer."""
+    if host_up():
+        return True
+    log = LOG.open("ab", buffering=0)
+    proc = subprocess.Popen(
+        [NODE, "--import", "tsx/esm", "apps/cli/src/bin.ts", "web"],
+        cwd=REPO, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    HOST_PID.write_text(str(proc.pid))
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        if host_up():
+            return True
+        if proc.poll() is not None:
+            return False
+        time.sleep(0.4)
+    return False
+
+
+def stop_host() -> bool:
+    """Stop a host we started. A host owned by someone else is left alone."""
+    pid = read_pid(HOST_PID)
+    if pid is None:
+        return False
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    for _ in range(40):
+        if not host_up():
+            HOST_PID.unlink(missing_ok=True)
+            return True
+        time.sleep(0.25)
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except OSError:
+        pass
+    HOST_PID.unlink(missing_ok=True)
+    return True
+
+
+def pwa_entry() -> str | None:
+    """An installed Chrome PWA for this URL, if the user installed one."""
+    apps = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "applications"
+    for path in sorted(apps.glob("chrome-*.desktop")):
+        try:
+            text = path.read_text(errors="ignore")
+        except OSError:
+            continue
+        if f"127.0.0.1:{PORT}" in text or f"localhost:{PORT}" in text:
+            return path.name
+    return None
+
+
+def open_window() -> None:
+    if not host_up():
+        start_host()
+    entry = pwa_entry()
+    try:
+        if entry is not None:
+            subprocess.Popen(["gtk-launch", entry.removesuffix(".desktop")],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            return
+        subprocess.Popen([CHROME, f"--app={URL}", f"--class={WM_CLASS}"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except FileNotFoundError:
+        subprocess.Popen(["xdg-open", URL], start_new_session=True)
+
+
+def ensure_tray() -> None:
+    """Spawn a detached tray if one is not already running."""
+    if read_pid(TRAY_PID) is not None:
+        return
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve())],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     stdin=subprocess.DEVNULL, start_new_session=True)
+
+
+def autostart_enabled() -> bool:
+    return AUTOSTART.exists()
+
+
+def set_autostart(on: bool) -> None:
+    if not on:
+        AUTOSTART.unlink(missing_ok=True)
+        return
+    AUTOSTART.parent.mkdir(parents=True, exist_ok=True)
+    AUTOSTART.write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=DeepSeek Harness tray\n"
+        "Comment=Supervises the local DeepSeek Harness host\n"
+        f"Exec={Path(__file__).resolve()}\n"
+        "Icon=dsh-harness\n"
+        "Terminal=false\n"
+        "X-GNOME-Autostart-enabled=true\n"
+    )
+
+
+def run_tray(selftest: float | None = None) -> int:
+    from PySide6.QtCore import QRectF, Qt, QTimer
+    from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPen, QPixmap
+    from PySide6.QtSvg import QSvgRenderer
+    from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
+    svg = ICON_SRC if ICON_SRC.exists() else FALLBACK_ICON
+    renderer = QSvgRenderer(str(svg)) if svg.exists() else None
+
+    def icon(running: bool) -> QIcon:
+        size = 64
+        pm = QPixmap(size, size)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        if renderer is not None and renderer.isValid():
+            renderer.render(p, QRectF(0, 0, size, size))
+        p.setPen(QPen(QColor("#161616"), 3))
+        p.setBrush(QColor("#42be65" if running else "#ee5396"))
+        p.drawEllipse(QRectF(size - 28, size - 28, 24, 24))
+        p.end()
+        return QIcon(pm)
+
+    tray = QSystemTrayIcon(icon(host_up()))
+    menu = QMenu()
+    act_open = QAction("Open DeepSeek Harness")
+    act_open.triggered.connect(open_window)
+    act_toggle = QAction("Start host")
+    act_restart = QAction("Restart host")
+    act_log = QAction("View log")
+    act_autostart = QAction("Start at login")
+    act_autostart.setCheckable(True)
+    act_autostart.setChecked(autostart_enabled())
+    act_autostart.toggled.connect(set_autostart)
+    act_quit = QAction("Quit (keep host running)")
+    act_quit_stop = QAction("Quit and stop host")
+    for a in (act_open, None, act_toggle, act_restart, act_log, None, act_autostart, None, act_quit, act_quit_stop):
+        menu.addSeparator() if a is None else menu.addAction(a)
+    tray.setContextMenu(menu)
+
+    def toggle() -> None:
+        if host_up():
+            if not stop_host():
+                tray.showMessage("DeepSeek Harness", "Host was started outside the tray; leaving it up.")
+        else:
+            tray.showMessage("DeepSeek Harness", "Starting host...")
+            tray.showMessage("DeepSeek Harness",
+                             "Host is up." if start_host() else "Host failed to start; see the log.")
+        refresh()
+
+    def restart() -> None:
+        stop_host()
+        start_host()
+        refresh()
+
+    act_toggle.triggered.connect(toggle)
+    act_restart.triggered.connect(restart)
+    act_log.triggered.connect(lambda: subprocess.Popen(["xdg-open", str(LOG)], start_new_session=True))
+    def quit_and_stop() -> None:
+        if not stop_host():
+            tray.showMessage("DeepSeek Harness",
+                             "Host was started outside the tray; leaving it up.")
+        app.quit()
+
+    act_quit.triggered.connect(app.quit)
+    act_quit_stop.triggered.connect(quit_and_stop)
+
+    was_up = host_up()
+
+    def refresh() -> None:
+        nonlocal was_up
+        up = host_up()
+        tray.setIcon(icon(up))
+        tray.setToolTip(f"DeepSeek Harness - {'running' if up else 'stopped'} ({URL})")
+        act_toggle.setText("Stop host" if up else "Start host")
+        act_open.setEnabled(True)
+        if was_up and not up:
+            tray.showMessage("DeepSeek Harness", "Host stopped.")
+        was_up = up
+
+    timer = QTimer()
+    timer.timeout.connect(refresh)
+    timer.start(2000)
+    tray.show()
+    refresh()
+    if not QSystemTrayIcon.isSystemTrayAvailable():
+        print("dsh-harness: no system tray on this desktop; running headless", file=sys.stderr)
+    if not host_up():
+        start_host()
+        refresh()
+    if selftest is not None:
+        QTimer.singleShot(int(selftest * 1000), app.quit)
+    TRAY_PID.write_text(str(os.getpid()))
+    try:
+        return app.exec()
+    finally:
+        TRAY_PID.unlink(missing_ok=True)
+
+
+def main() -> int:
+    if not (REPO / "apps/cli/src/bin.ts").is_file():
+        print(f"dsh-harness: no DSH checkout at {REPO} — set DSH_REPO", file=sys.stderr)
+        return 2
+    args = sys.argv[1:]
+    flag = args[0] if args else ""
+    if flag == "--status":
+        print(f"{'running' if host_up() else 'stopped'}  {URL}")
+        return 0 if host_up() else 1
+    if flag == "--start":
+        return 0 if start_host() else 1
+    if flag == "--stop":
+        return 0 if stop_host() else 1
+    if flag == "--restart":
+        stop_host()
+        return 0 if start_host() else 1
+    if flag == "--app":
+        open_window()
+        ensure_tray()
+        return 0
+    if flag == "--selftest":
+        return run_tray(float(args[1]) if len(args) > 1 else 5.0)
+    if flag in ("--help", "-h"):
+        print(__doc__.strip())
+        return 0
+    if flag.startswith("-"):
+        print(f"dsh-harness: unknown option {flag}", file=sys.stderr)
+        print("try: dsh-harness --help", file=sys.stderr)
+        return 2
+    return run_tray()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

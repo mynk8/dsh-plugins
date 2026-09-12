@@ -1,0 +1,14 @@
+# Activation row for @mynk8/dsh-theme-oxocarbon.
+#
+# This is the bundle half of the plugin. DSH appends any profile dependency that
+# declares `dsh.bundle.patch` to `dsh.profile.bundles` (see apps/cli/src/plugin.ts),
+# and bundle layers are composed at boot — so installing is one command:
+#
+#   dsh plugin --profile web add @mynk8/dsh-theme-oxocarbon
+#
+# Do NOT also insert this row into a profile's own cordis.patch.yml. The two
+# layers would compose to two entries with the same id rather than merging into
+# one, and the plugin would be mounted twice.
+- insert:
+    - id: theme-oxocarbon
+      name: "@mynk8/dsh-theme-oxocarbon"

@@ -1,0 +1,55 @@
+{
+  "name": "@mynk8/dsh-theme-oxocarbon",
+  "version": "0.1.0",
+  "description": "Oxocarbon theme for the DeepSeek Harness web UI, with selectable alternate palettes (slack, everforest)",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "theme",
+    "oxocarbon",
+    "carbon",
+    "base16",
+    "client-plugin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mynk8/dsh-plugins.git",
+    "directory": "packages/theme-oxocarbon"
+  },
+  "homepage": "https://github.com/mynk8/dsh-plugins/tree/main/packages/theme-oxocarbon",
+  "bugs": {
+    "url": "https://github.com/mynk8/dsh-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test/smoke.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
+  }
+}
