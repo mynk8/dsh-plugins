@@ -75,9 +75,3 @@ scripts/           release helpers
 
 Every directory under `packages/` is standalone: no build step, no runtime dependency on
 a sibling, and installable on its own by the git spec above.
-
-## Secrets
-
-Nothing here needs credentials and none are committed. `.gitignore` excludes `.env*`,
-`.npmrc`, keys, certificates and `credentials.json` so a local file cannot be
-accidentally included. See `.gitignore` for the full list.
